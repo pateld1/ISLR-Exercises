@@ -1,3 +1,3 @@
 # ISLR-Exercises
 
-To view each set of exercises, open the .md file or the PDF file. Alternatively, download the HTML file if it is too large and open it in your favorite web browser. 
+To view each set of exercises, open the .html file. If the file is too large, download it and view it in your favorite web browser. Alternatively, open the corresponding .pdf file. This file will usually be cumbersome to read due to the size of the document. 
