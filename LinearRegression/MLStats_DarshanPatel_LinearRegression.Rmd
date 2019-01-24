@@ -1,0 +1,189 @@
+---
+title: 'MLStats: LinearRegression'
+author: "Darshan Patel"
+date: "1/18/2019"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+In this assignment, mimic the lab exercises from ISLR Chapter 3: Linear Regression. 
+
+## Libraries
+For this assignment, load `MASS` for access to many datasets and the `tidyverse` package which will help with exploring data and plotting. Load `car` for some functions. 
+```{r, message=FALSE}
+library(MASS)
+library(tidyverse)
+library(car)
+```
+
+## Simple Linear Regression
+The dataset that will be used in this assignment is the `road` dataset. In it there is information about road accident deaths in $26$ US states, such as number of deaths, length of rural roads and fuel consumption per year. 
+
+The features in this dataset are
+```{r}
+colnames(road)
+```
+
+Excluding the target response, `deaths`, there are $5$ predictor variables. Each of these are numerical values. In the later section on qualitative predictors, an additional feature will be placed that gives information on the state's population. 
+
+Here is a look of the first $6$ rows. 
+```{r}
+head(road)
+```
+
+For the first simple linear model, try to predict `deaths` using only the number of drivers.
+```{r}
+model1 = lm(data = road, deaths~drivers)
+summary(model1)
+```
+According to this, $\hat{\beta}_0 = 122.0989$ and $\hat{\beta}_1 = 4.5951$. This means that for a unit increase of $10,000$ drivers, the number of deaths by road accident increases by $4.4951$. In addition, the $p$-value associated with `drivers` is close to $0$ and so we can reject the null hypothesis that $H_0: \beta_{\text{driver}} = 0$. This means `drivers` is statistically significant. This linear model has a RSE of $285.2$ and $R^2$ value of $0.9129$. This is a strong positive $R^2$ value. The model fits well. The confidence interval for the coefficient estimates are shown below
+```{r}
+confint(model1)
+```
+The $95\%$ confidence interval associated with `drivers` is $(3.997271, 5.193004)$. 
+
+The regression line showed a nice positive $R^2$ value, meaning the regression line explained most of the variance. Let's see how the data looks with the regression line. 
+```{r}
+ggplot(data = road, aes(x = drivers, y = deaths)) + geom_point(col = "blue") + 
+  geom_abline(intercept = model1$coefficients[1], 
+              slope = model1$coefficients[2], 
+              color = "red") + 
+  ggtitle("Number of Drivers vs. Number of Road Accident Deaths Annually") + 
+  theme_bw()
+```
+
+The regression line is a good fit for the data. Now let's look at some diagnostic plots.
+```{r}
+par(mfrow = c(2,2))
+plot(model1)
+```
+
+According to these plots, there are some conclusions that can be drawn. The residuals vs. fitted plot shows that three states showed huge residuals in the model, Maine, Massachusetts and Connecticut. In the residuals vs. leverage plot, it clear that California is a leverage point. This can also be found using the `which.max` and `hatvalues` function. 
+```{r}
+which.max(hatvalues(model1))
+```
+
+## Multiple Linear Regression
+Using the same dataset, use two features to predict `deaths`. Let these two features be number of drivers, `drivers` and length of rural roads, `rural`. 
+```{r}
+model2 = lm(data = road, deaths~drivers+rural)
+summary(model2)
+```
+This model slightly improves on the above model. The residual standard error goes slightly down while $R^2$ goes slightly up. However, while `drivers` is statistically significant, `rural` is not, since the associated $p$-value with the coefficient estimate is not smaller than $\alpha = 0.01$. 
+
+Now let's try using all features to predict `deaths`. 
+```{r}
+model3 = lm(data = road, deaths~.)
+summary(model3)
+```
+By using all $5$ predictors, the model was able to explain $93\%$ of the variance of the `death` variable around its mean, a new high score. This model did better than the univarate and bivariate models. What is also interesting to see here is that `drivers` remains to be the only predictor that is statistically significant which others are insignificant. The variation inflation factors are calculated below. 
+```{r}
+vif(model3)
+```
+Since these VIF values are low (less than $20$), it can be said that the predictor variables do not show presence of multicollinearity. 
+
+Now, in the above model, it is clear that see that `popden` has a high $p$-value, a staggering $0.598$! Let's make a model without this feature. 
+```{r}
+model4 = lm(data = road, deaths~.-popden)
+summary(model4)
+```
+By removing `popden`, the RSE went down. This shows that it is important to use $p$-values to remove extraneous features that hinder model performance. 
+
+## Interaction Terms 
+Try creating an interaction between `rural` and `temp` to see if it can predict `deaths` well.
+```{r}
+model5 = lm(data = road, deaths~rural*temp)
+summary(model5)
+```
+This model does poorly, with a RSE of $643.5$. Too high! Try another interaction. 
+```{r}
+model6 = lm(data = road, deaths~drivers*fuel)
+summary(model6)
+```
+This interaction did better than the previous interaction but not as well as the $4$ predictor model, in terms of the RSE metric.  
+```{r}
+model7 = lm(data = road, deaths~drivers*popden)
+summary(model7)
+```
+This interaction made even less residual standard errors. Now $94.86\%$ of the variance in the response variable is explained by the regression line. 
+
+I think here is a good place to stop looking for improvements by interactions. Otherwise we will be overfitting the data.. 
+
+## Non-linear Transformations of the Predictors
+Let's try non-linear transformations. 
+```{r}
+model8 = lm(data = road, deaths~log(drivers))
+summary(model8)
+```
+By using the log value of `drivers`, the model performed worse than using the feature regularly. The RSE value is very high and a bit over a half of the variance in `deaths` is explained. Try another non-linear transformation.
+```{r}
+model9 = lm(data = road, deaths~poly(rural, 2) + exp(rural) + gamma(rural))
+summary(model9)
+```
+This model uses some interesting transformations, such as polynomials, the gamma function and the normal exponential function. The RSE improved from the previous transformation by a third. What is also visible here is that some of these transformed variables coefficients are statistically significant since the $p$-values associated with them are close to $0$, such as the exponential of `rural` and gamma of `rural`. In addition, only the coefficient of rural raised to the first power is statistically significant while when it is raised to the second power, it loses significance. 
+
+```{r}
+par(mfrow = c(2,2))
+plot(model9)
+```
+
+These plots show that California remains to be a leverage point and that the residuals are more spread out than above. 
+
+## Qualitative Predictors
+This dataset does not have any qualitative predictor, so let's add one. The following `R` commands will add in a column that bins the state's population into either "low", "average", "high" or "very high" population. 
+```{r}
+pop_type = cut(road$popden, breaks = c(quantile(road$popden, probs = seq(0,1, by = 0.25))), 
+               labels=c("Low", "Med", "High", "Very High"))
+pop_type[2] = "Low"
+df = cbind(road, pop_type)
+```
+The coding that `R` uses for this new predictor is as follows
+```{r}
+contrasts(df$pop_type)
+```
+
+First make a model using all predictors except `pop_type` and then with `pop_type`.
+```{r}
+model10 = lm(data = df, deaths~.-pop_type)
+model11 = lm(data = df, deaths~.)
+
+summary(model10)$sigma
+summary(model11)$sigma
+```
+By adding in a categorical predictor, `pop_type`, to show population level, the residual standard error of the model went down. 
+```{r}
+summary(model11)
+```
+To intercept the `pop_type` coefficient, read it as follows: if the `pop_type` of the state is `low`, then the number of deaths is $238.24383$ plus the values from the other coefficients. If the `pop_type` of the state is `med`, then the number of deaths is $238.24383 + -19.69099 = 218.5528$, where the coefficient for each factor of `pop_type` is added to the base level of `low` `pop_type`, plus the values from the other coefficients, and so on. 
+
+## Writing Functions
+```{r}
+# This function will return the polynomial degree that results in the lowest RSE
+# in the linear regression model given one predictor, one target variable and 
+# a maximum polynomial degree. 
+lm_poly_max = function(x, y, max_deg = 10){
+  
+  df = data.frame(x = x, y = y)
+  rse = c()
+  for(i in 1:max_deg){
+    model = lm(data = df, y~poly(x,i))
+    rse = c(rse, summary(model)$sigma)
+  }
+  return(which.min(rse))
+}
+```
+For example, the degree of `drivers` where RSE is lowest when predicting `deaths` using `drivers` is
+```{r}
+lm_poly_max(road$drivers, road$deaths)
+```
+and the degree of `fuel` when predicting `deaths` using `fuel` is
+```{r}
+lm_poly_max(road$fuel, road$deaths)
+```
+
+All of the lab instructions in this document are taken from "An Introduction to Statistical Learning, with applications in R"  (Springer, 2013) with permission from the authors: G. James, D. Witten,  T. Hastie and R. Tibshirani. 
