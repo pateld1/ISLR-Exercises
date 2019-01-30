@@ -1,0 +1,312 @@
+---
+title: 'MLStats: Classification'
+author: "Darshan Patel"
+date: "1/28/2019"
+output: 
+  md_document:
+    variant: markdown_github
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+In this assignment, mimic the lab exercises from ISLR Chapter 4: Classification.  
+
+## Libraries
+For this assignment, load `MASS` for access to many datasets and the `tidyverse` package which will help with exploring data and plotting. Load `gridExtra` and `RColorBrewer`to make nice plots, and `class` to utilize knn. 
+```{r, message=FALSE}
+library(MASS)
+library(tidyverse)
+library(gridExtra)
+library(RColorBrewer)
+library(class)
+```
+## Dataset
+In this assignment, the dataset that will be used is the Diabetes in Pima Indian Women dataset, available in `MASS`. In this study, $532$ participants were tested for diabetes. Medical data such as number of pregnancies, diastolic blood pressure, plasta glucose concentration and BMI were also collected in the diabetes testing. 
+
+Note: `R` has already created a training and testing set for study, called `Pima.tr` and `Pima.te` respectively. Combine the two to increase data. 
+
+```{r}
+df = rbind(Pima.tr, Pima.te)
+```
+
+Create a new train/test split for when needed later on. 
+```{r}
+set.seed(2019)
+indices = sample(1:nrow(df), size = round(0.7 * nrow(df)))
+train = df[indices,]
+test = df[-indices,]
+```
+Create two vectors to hold percentage of correct predictions and model names.
+```{r}
+accuracies = c()
+models = c()
+```
+
+The number of observations in the binded dataset is
+```{r}
+nrow(df)
+```
+
+where the features are
+```{r}
+colnames(df)
+```
+
+The response variable is `type`, which is a `Yes/No` for diabetic status of the particular woman. 
+
+Let's look at the numerical description of the dataset first. 
+```{r}
+summary(df)
+```
+
+Notice that there is twice as many non-diabetic women as diabetic women. 
+
+Visualize the data against `type`.
+```{r}
+g1 = ggplot(df, aes(x = npreg, y = type)) + geom_point()
+g2 = ggplot(df, aes(x = glu, y = type)) + geom_point()
+g3 = ggplot(df, aes(x = bp, y = type)) + geom_point()
+g4 = ggplot(df, aes(x = skin, y = type)) + geom_point()
+g5 = ggplot(df, aes(x = bmi, y = type)) + geom_point()
+g6 = ggplot(df, aes(x = ped, y = type)) + geom_point()
+g7 = ggplot(df, aes(x = age, y = type)) + geom_point()
+
+grid.arrange(g1, g2, g3, g4, g5, g6, g7, ncol = 2)
+```
+
+The visual plots show that there is some correlation between diabetic type and the following variables: `glu` (plasma glucose concentration), `bmi` (body mass index), `age`, and `ped` (diabetes pedigree function). 
+
+The following interaction is a good predictor of `type`.
+```{r}
+ggplot(df, aes(x = log(bmi) + age*ped + glu, y = type)) + geom_point() + 
+  ggtitle("Correlation of Interaction and Diabetic Type") + 
+  theme_light()
+```
+
+Now, onto the fun part. 
+
+## Logistic Regression
+Use logistic regression to predict `type` using `bmi`, `age`, `ped` and `glu` on the entire dataset.
+```{r}
+lr_all = glm(data = df, type~log(bmi) + age*ped + glu, family = binomial)
+summary(lr_all)
+```
+
+By using the entire dataset and the interaction, it is found that only `log(bmi)` and `glu` were statistically significant. This means they're both associated with `type`. 
+
+Now, create the predictions using the model.
+```{r}
+predictions = predict(lr_all, type = "response")
+```
+
+Since this is an imbalanced dataset, the cut-off point will be $\frac{355}{177+355}$ or approximately `r round(355 / (177+355), 3)`.
+```{r}
+pred = rep(0, nrow(df))
+cutoff = round(355 / (177+355), 3)
+pred[predictions > cutoff] = 1
+```
+
+The confusion matrix is as follows:
+```{r}
+table(pred, df$type)
+```
+
+According to this, `r 338 + 78` observations were correctly classified while `r 17 + 99` observations were not correctly classified.
+
+The percentage of correct predictions is
+```{r}
+p = (338 + 78) / nrow(df)
+accuracies = c(accuracies, p)
+models = c(models, "logistic regression (all)")
+p
+```
+
+Not so great. Note that when using the entire dataset, the model is overoptimistic and thus overestimates the test set error. Try to improve using a train/test split.
+```{r}
+lr = glm(data = train, type~log(bmi) + (age*ped) + glu, family = binomial)
+summary(lr)
+```
+
+Here both `log(bmi)` and `glu` are statistically significant and associated with `type`. 
+
+Create the predictions and compute the confusion matrix
+```{r}
+predictions = predict(lr, test, type = "response")
+pred = rep(0, nrow(test))
+pred[predictions > cutoff] = 1
+table(pred, test$type)
+```
+
+According to this, `r 99 + 26` observations were correctly classified and `r 33 + 2` observations were not correctly classified. The percentage of correct predictions is 
+```{r}
+p = (99 + 26) / nrow(test)
+accuracies = c(accuracies, p)
+models = c(models, "logistic regression")
+p
+```
+
+The above intuition was correct. The model created from the train/test split performed an accuracy of $78.125\%$ on the testing set whereas had an accuracy of $78.195\%$ when the entire dataset was used. It is a small decrease in error however. Can it be improved? 
+
+## Linear Discriminant Analysis (LDA)
+Perform LDA classification on the training set.
+```{r}
+lda_model = lda(data = train, type~log(bmi) + (age*ped) + glu)
+lda_model
+```
+
+According to the model creation, there is a roughly $7$ to $3$ imbalance in `type`, which here is called the prior probability (think bayesian statistics). Furthermore, the coefficients of linear discriminants are also shown. Here, if $$ 1.44240799 \times \log(\text{bmi}) + 0.02123152 \times \text{age} - 0.36570597 \times \text{ped} + 0.02837952 \times \text{glu} + 0.02883985 \times \text{age*ped} $$ is large, then the classifier will predict `Yes`, otherwise `No`. 
+
+Plot the linear discriminants to show the distribution of the probabilities of `Yes` and `No`.
+```{r}
+plot(lda_model)
+```
+
+Now make the predictions and classify each observation in the test set. 
+```{r}
+predictions = predict(lda_model, test)
+```
+
+The confusion matrix is:
+```{r}
+table(predictions$class, test$type)
+```
+
+The classifier has correctly identified `r 93 + 32` observations and misclassified `r 27 + 8` observations. The percentage of correct predictions is
+```{r}
+p = (93 + 32) / nrow(test)
+accuracies = c(accuracies, p)
+models = c(models, "LDA")
+p
+```
+
+The model accuracy is the same as the one for the logistic regression model. This is bound to occur because both classifiers produce linear decision boundaries. Now let's try improving the model by incorporating quadratic coefficients.
+
+## Quadratic Discriminant Analysis (QDA)
+Perform QDA on the training set.
+```{r}
+qda_model = qda(data = train, type~log(bmi) + (age*ped) + glu)
+qda_model
+```
+
+The prior distributions are the same as before since that is only the distribution in the training set. Coefficients are not given in the QDA classifier since the model involves a quadratic function of the features.
+
+Make the predictions, and classify each observation in the test set. 
+```{r}
+predictions = predict(qda_model, test)
+```
+
+The confusion matrix is:
+```{r}
+table(predictions$class, test$type)
+```
+
+The classifier has correctly identified `r 94 + 32` observations and misclassified `r 27 + 7` observations. The percentage of correct predictions is
+```{r}
+p = (94 + 32) / nrow(test)
+accuracies = c(accuracies, p)
+models = c(models, "QDA")
+p
+```
+
+The QDA classifier performed slighter than the LDA classifier, giving an $0.3\%$ increase in accuracy of `type` predictions. 
+
+How about KNN?
+
+## K-Nearest Neighbors
+Perform the KNN algorithm using $k=1$. 
+```{r}
+knn_model = knn(data.frame(log(train$bmi) + (train$age*train$ped) + train$glu), 
+                data.frame(log(test$bmi) + (test$age*test$ped) + test$glu), 
+                train$type, k = 1)
+table(knn_model, test$type)
+```
+
+The KNN model, with $k=1$ correctly classified `r 81 + 26` observations and misclassified `r 20 + 26` observations. The percentage of correct predictions is
+```{r}
+p = (81 + 26) / nrow(test)
+accuracies = c(accuracies, p)
+models = c(models, "KNN (k=1)")
+p
+```
+
+This model has underperformed compared to the other classifying models. Is there any $k$ value that will actually achieve a high accuracy score?
+
+Perform the KNN algorithm using increasing values of $k$ to find the optimal $k$ value that has the highest percentage of correct predictions. 
+```{r}
+acc_score = c()
+for(i in 1:nrow(train)){
+  model = knn(data.frame(log(train$bmi) + (train$age*train$ped) + train$glu), 
+              data.frame(log(test$bmi) + (test$age*test$ped) + test$glu), 
+              train$type, k = i)
+  acc_score = c(acc_score, 
+                 sum(diag(table(model, test$type))) / nrow(test))
+}
+knn_best_acc = acc_score[which.max(acc_score)]
+knn_best_k = which.max(acc_score)
+
+accuracies = c(accuracies, knn_best_acc)
+models = c(models, paste("KNN (k =", knn_best_k, ")", sep = ""))
+```
+
+The $k$ value that when incorporated in the KNN classifier creates the highest percentage of correct predictions on the test set is
+```{r}
+knn_best_k
+```
+
+and the associated percentage of correct predictions is
+```{r}
+knn_best_acc
+```
+
+Plot the $k$ values against the percentage of correct predictions.
+```{r}
+knn_df = data.frame(k = 1:nrow(train), percentage = acc_score)
+ggplot(data = knn_df, aes(x = k, y = percentage)) + geom_path() + 
+  ggtitle("Percentage of Correct Predictions as a Function of k in the KNN Classifier") + 
+  labs(x = "k", 
+       y = "percentage of correct predictions") + 
+  geom_hline(yintercept = knn_best_acc, 
+             linetype = "dashed", 
+             color = "deepskyblue") + 
+  annotate("text", 
+           x = 300, 
+           y = knn_best_acc - 0.01, 
+           label = paste("accuracy score =", knn_best_acc)) + 
+  geom_vline(xintercept = knn_best_k,
+             linetype = "dashed", 
+             color = "darkorchid") + 
+  annotate("text", 
+           x = knn_best_k + 20, 
+           y = 0.70, 
+           label = paste("k =", knn_best_k)) + 
+  theme_bw()
+```
+
+As can be seen in this plot, accuracy score levels off after a certain $k$ value and remains at a constant low. 
+
+Plot all the classifiers's percentage of correct predictions to do an overview of each model's performance.
+```{r}
+all_accs = data.frame(classifier = models, 
+                      score = accuracies)
+ggplot(data = all_accs, 
+       aes(x = reorder(classifier, score),
+           y = score)) + 
+  geom_bar(stat = "identity", 
+           fill = brewer.pal(n = 6, 
+                             name = "Accent")) + 
+  coord_cartesian(ylim=c(0.65, 0.85)) + 
+  theme(axis.text.x = element_text(angle=30, hjust=1)) + 
+  labs(x = "classifier", 
+       y = "percentage of correct predictions") + 
+  ggtitle("Classification Model Performances")
+```
+
+Conclusion: The model that best predicted whether a Pima Indian woman was diabetic or not was the KNN classifier with $k=42$. The model that performed the worst was the KNN classifier with $k=1$. In fact, the second worst classifier was the LDA classifier and yet it had an additional $10\%$ accuracy. There is no difference between the LDA model and the logistic regression model (but that was expected due to their similar mathematic forms). The QDA model improved slightly from the LDA model but not as much as the KNN model with $k=42$. 
+
+Future Considerations: Try bootstrapping or bagging (see Chapter 5: Resampling Methods).
+
+All of the lab instructions in this document are taken from "An Introduction to Statistical Learning, with applications in R"  (Springer, 2013) with permission from the authors: G. James, D. Witten,  T. Hastie and R. Tibshirani. 
