@@ -1,0 +1,248 @@
+---
+title: 'MLStats: Moving Beyond Linearity'
+author: "Darshan Patel"
+date: "2/19/2019"
+output: 
+  md_document:
+    variant: markdown_github
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+In this assignment, mimic the lab exercises from ISLR Chapter 7: Moving Beyond Linearity.
+
+## Libraries
+Load the following libraries.
+```{r, message=FALSE}
+rm(list = ls())
+library(MASS)
+library(tidyverse)
+library(gridExtra)
+library(boot)
+library(GGally)
+library(gam)
+library(splines)
+library(leaps)
+```
+
+## Dataset
+
+In this assignment, the dataset that will be used is.. none. Instead, a synthetic dataset will be made using sampling and decimal degrees.
+
+The reason for this is that I have looked through many datasets where only linear relationships exists and if nonlinear methods were used, results did not seem to differ from method to method.
+
+```{r}
+set.seed(2019)
+n = 50
+x1 = sample(1:200, size = n, replace = FALSE)
+x2 = sample(1:200, size = n, replace = FALSE)
+x3 = sample(c("BS", "MS", "PhD", size = n, replace = TRUE))
+noise = runif(n, 0, 15)
+y = rnorm(n, 13 + 54*x1^(-0.2) + 2.6*x1^(-3.1) + 1.3*x2^(-2.1), 1) + noise
+df = data.frame(y, x1, x2, x3)
+df$x3 = as.factor(df$x3)
+```
+
+In this dataset, there are 
+```{r}
+n
+```
+observations. The variables are: 
+```{r}
+colnames(df)
+```
+Pretty basic. `x1` will be used for polynomial regression, step functions and splines, whereas `x2` and `x3` will come with GAMs. 
+
+The data for `x1` and `y` is plotted below.
+```{r}
+basic_plot = ggplot(df, aes(x1,y)) + geom_point() + 
+  ggtitle("Simulated Data") + 
+  theme_minimal()
+basic_plot
+```
+
+The relationship between $x$ and $y$ is pretty nonlinear. 
+
+The first non-linear fitting procedure that will be looked at is polynomial regression.
+
+## Polynomial Regression and Step Functions
+
+First fit a polynomial regression model of degree $3$.
+```{r}
+model1 = lm(y ~ poly(x1, 3), data = df)
+summary(model1)
+```
+According to the output, the adjusted $R^2$ statistic for this model is $0.52$, meaning that only $52\%$ of the variation in $y$ is explained by the model. In addition, two of the three coefficient estimates are statistically significant.
+
+Plot this on the data. 
+```{r}
+basic_plot + stat_smooth(method = "lm", se = FALSE, 
+                       formula = y ~ poly(x, 3), 
+                       color = "red")
+```
+
+The model can be improved on. Perform hypothesis testing using ANOVA to find the simplest model to determine `rings` using `whole.weight`.
+```{r}
+fit1 = lm(y ~ poly(x1, 1), data = df)
+fit2 = lm(y ~ poly(x1, 2), data = df)
+fit3 = lm(y ~ poly(x1, 3), data = df)
+fit4 = lm(y ~ poly(x1, 4), data = df)
+fit5 = lm(y ~ poly(x1, 5), data = df)
+fit6 = lm(y ~ poly(x1, 6), data = df)
+anova(fit1, fit2, fit3, fit4, fit5, fit6)
+```
+According to an analysis of variance using an $F$-test, the $p$-value comparing the linear model to the quadratic model is next to $0$, meaning that the linear fit is not sufficient. Likewise, the $p$-value comparing the quadratic model to the tertiary model is also small, However, the $p$-value comparing the tertiary model to the degree $4$ model is significantly large (greater than $\alpha = 0.05$), meaning that the degree $3$ model will provide the best fit to the data. 
+
+The coefficient of the degree $3$ model are
+```{r}
+coef(summary(fit3))[,1]
+```
+
+Another way to find the best polynomial fit is by using cross validation.
+```{r}
+set.seed(2019)
+indices = sample(1:nrow(df), size = 0.7*nrow(df))
+train = df[indices,]
+test = df[indices,]
+
+sse = c()
+for(i in 1:10){
+  model_temp = lm(y ~ poly(x1, i), data = train)
+  sse = c(sse, mean((predict(model_temp) - test$y)^2))
+}
+```
+
+By cross validation, the best polynomial fit is made using degree
+```{r}
+which.min(sse)
+```
+That's a lot of degrees!
+
+Now let's try regressing $y$ using a step function.
+```{r}
+model2 = lm(y ~ cut(x1, 3), data = df)
+summary(model2)
+```
+This model performed worse than the polynomial regression model of degree $3$ since the RSE here is $5.283$ where before it is $4.603$. In addition, the $R^2$ statistic also went down. 
+
+Try using polynomial functions and step functions to find the best model using $k$-fold cross validation.
+```{r}
+set.seed(3)
+poly_mses = c()
+for(i in 1:8){
+  model = glm(data = df, y ~ poly(x1, i))
+  poly_mses = c(poly_mses, cv.glm(df, model, K = 5)$delta[1])
+}
+
+cut_mses = c(80)
+for(i in 2:8){
+  df$cutted = cut(df$x1, i)
+  model = glm(data = df, y ~ cutted)
+  cut_mses = c(cut_mses, cv.glm(df, model, K=5)$delta[1])
+}
+mses_df = data.frame(x = 1:8,
+                     "poly degree" = poly_mses, 
+                     "number of steps" = cut_mses)
+mses_df %>% gather(parameter, value, 
+                   poly.degree, number.of.steps) %>%
+  ggplot(aes(x = x, y = value, 
+             color = parameter)) + 
+  geom_path() + 
+  ggtitle("Testing Error as a Function of Parameter") + 
+  labs(x = "parameter value", y = "MSE") + 
+  scale_x_continuous(limits = c(1,8), 
+                     breaks = 1:8) + 
+  theme_minimal()
+```
+
+By using cross validation, it can be seen that adding many steps helped to lower MSE. After a number of steps, MSE then rose up, suggesting overfitting. As for the degrees of polynomial, a high degree does not help with lowering error; after $5$ degrees, MSE went up. In fact, the best number of step is
+```{r}
+which.min(cut_mses)
+```
+and the best degree of polynomial is
+```{r}
+which.min(poly_mses)
+```
+According to $k$-fold cross validation, the best number of steps is $8$ and the best number of degree of polynomial is $5$.
+
+Try using regression splines to improve the model.
+
+## Splines
+
+First fit a cubic spline using three knots assigned by hand.
+```{r}
+model3 = lm(y ~ bs(x1, knots = c(10, 75, 150)), data = df)
+summary(model3)
+```
+This model appears to have one statistically significant coefficient estimates after six degrees. 
+Plot the splines on the data.
+```{r}
+basic_plot + stat_smooth(method = "lm", se = FALSE, 
+                       formula = y ~ bs(x, knots = c(10, 75, 150)), 
+                       color = "red")
+```
+
+Instead of supplying the knots itself, use quantiles to fit a natural spline on the data. 
+```{r}
+model4 = lm(y ~ ns(x1, df = 3), data = df)
+summary(model4)
+```
+This model performs slightly worse than the previous regression spline model. $R^2$ went down to $0.50$. The RSE went up to $4.736$ from $4.179$. 
+
+Plot the splines on the data. 
+```{r}
+basic_plot + stat_smooth(method = "lm", se = FALSE, 
+                       formula = y ~ ns(x, df = 3), 
+                       color = "red")
+```
+
+This plot looks similar to the polynomial regression model of degree $3$ where the right-hand side is somewhat flat. In the previous spline model, this section of the plot was more wavy. This makes sense, more variation in $y$ was explained in the previous spline model than this model. 
+
+Now onto GAMs. 
+
+## GAMs
+
+Produce a GAM using all $3$ predictors and smoothing splines of degree $3$.
+```{r}
+model5 = gam(y ~ s(x1, 3) + s(x2, 3) + x3, data = df)
+```
+
+The model can visualized below.
+```{r}
+par(mfrow = c(1,3))
+plot(model5, se = TRUE)
+```
+
+The first plot is nonlinear with respect to `x1`, as well as the second plot for `x2`. The third plot shows that as `x3` increases, or education increases, `y` increases. (This is a spurious correlation, `x3` was generated randomly.)
+
+A series of ANOVA tests can be done to see which model of increasing variables is the best.
+```{r}
+gam1 = gam(y ~ s(x1, 3), data = df)
+gam2 = gam(y ~ s(x1, 3) + s(x2, 3), data = df)
+anova(gam1, gam2, model5)
+```
+There is compeling evidene that a GAM with `x1`, `x2` and `x3` would be infavorable since its $p$-value is large. In fact, even just `x1` and `x2` is infavorable.
+
+The summary of the model with all variables is shared below.
+```{r}
+summary(model5)
+```
+The $p$-value for `x1` is close to $0$, meaning that the the coefficient estimate is statistically significant. For `x2`, it is statistically significant. `x3` also has a high $p$-value, which agrees with the ANOVA test above. 
+
+It would be best to use a GAM with just `x1` with $3$ splines. 
+
+## Bonus: Spline of degree $n$
+
+A model of $n$ observations can be fit with a degree $n$ spline where the splines would go through each point. This would simple be a line between two consecutive points in increasing $x$ value. Let's see how that looks.
+```{r}
+basic_plot + geom_line(color = "red")
+```
+
+Interesting. This model would of course be overfitting the data. 
+
+
+All of the lab instructions in this document are taken from "An Introduction to Statistical Learning, with applications in R"  (Springer, 2013) with permission from the authors: G. James, D. Witten,  T. Hastie and R. Tibshirani. 
