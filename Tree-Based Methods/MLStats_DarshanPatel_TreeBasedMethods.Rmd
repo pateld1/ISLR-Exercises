@@ -1,0 +1,280 @@
+---
+title: 'MLStats: Tree Based Methods'
+author: "Darshan Patel"
+date: "2/27/2019"
+output: 
+  md_document:
+    variant: markdown_github
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+In this assignment, mimic the lab exercises from ISLR Chapter 8: Tree-Based Methods.
+
+## Libraries
+Load the following libraries.
+```{r message=FALSE}
+rm(list = ls())
+library(MASS)
+library(knitr)
+library(tidyverse)
+library(tree)
+library(randomForest)
+library(gbm)
+library(glmnet)
+library(class)
+```
+
+## Dataset
+
+In this assignment, the dataset that will be used is `glass.txt`. It contains a number of chemical compositions of glass. The goal is to properly classify types of glass based on its composition. This type of information is good for forensics use. 
+
+(Source: https://archive.ics.uci.edu/ml/datasets/glass+identification)
+
+```{r}
+df = read_delim("glass.txt", delim = ',', col_names = FALSE)
+colnames(df) = c("ID", "RI", "Na", "Mg", "Al",
+                 "Si", "K", "Ca", "Ba", "Fe", "type")
+df = df %>% subset(select = -ID)
+df$type = as.factor(df$type)
+```
+
+The size of the dataset is
+```{r}
+nrow(df)
+```
+
+The number of variables in the dataset is
+```{r}
+ncol(df)
+```
+
+The variables are listed below:
+```{r}
+colnames(df)
+```
+
+# Basic Tree Model 
+
+First, create a train and test split for the data.
+```{r}
+set.seed(2019)
+indices = sample(1:nrow(df), size = 0.7*nrow(df))
+train = df[indices,]
+test = df[-indices,]
+```
+
+Regress on `type` using the training data.
+```{r}
+model_base = tree(type~., data = train)
+summary(model_base)
+```
+According to this, the tree has $15$ terminal nodes and a residual mean deviance of $0.95$.
+
+Plot the tree.
+```{r}
+plot(model_base)
+text(model_base, pretty = 0)
+```
+
+It can be seen that whether a magesium composition was less than $2.56\%$ was most important in predicting `type`, followed closely by calcium and barium composition. Let's look at it more analytically.
+```{r}
+model_base
+```
+Looking at one of the terminal nodes, for example node $50$, the split criterion is whether the calcium composition is less than $8.04\%$ or not. There are $6$ observations at this node with a deviation of $5.407$. Furthermore, $16.67\%$ of the observations are of glass type `2` while the other $83.33\%$ are of another type (type `1` if looked at node $51$).
+
+Now find the test error rate.
+```{r}
+predictions = predict(model_base, test, type = "class")
+table(predictions, test$type)
+```
+According to the confusion matrix, glass types of $5$ and $7$ were correctly identified $100\%$ of the time. The test error rate is
+```{r}
+error_base = (nrow(test) - sum(diag(table(predictions, test$type)))) / nrow(test)
+error_base
+```
+Can this be improved on by pruning the tree?
+```{r}
+set.seed(3)
+model_base_cv = cv.tree(model_base, FUN = prune.misclass)
+model_base_cv_df = data.frame(size = model_base_cv$size, 
+                              error = model_base_cv$dev)
+ggplot(model_base_cv_df, aes(x = size, y = error)) + geom_path() +
+  ggtitle("CV Error as a Function of Number of Terminal Nodes") + 
+  theme_minimal()
+```
+
+The best number of terminal nodes to use is $11$. This is less than the number of terminal nodes used in the tree above. Using this new value, a pruned tree is made.
+```{r}
+model_base_pruned = prune.misclass(model_base, best = 11)
+plot(model_base_pruned)
+text(model_base_pruned, pretty = 0)
+```
+
+The important chemical elements used to classify `type` remain the same. The confusion matrix is
+```{r}
+predictions = predict(model_base_pruned, test, type = "class")
+table(predictions, test$type)
+```
+According to the confusion matrix, there is no improvement when compared to the previous confusion matrix. The test error rate is
+```{r}
+error_base_pruned = (nrow(test) - sum(diag(table(predictions, test$type)))) / nrow(test)
+error_base_pruned
+```
+The error rate has gone up after pruning! This shows that pruning does not help improve classification of glass type. 
+
+The next tree-based method to consider is bagging.
+
+## Bagging
+
+Create a bagged model with $m=p$ variables to consider at each split.
+```{r}
+model_bag = randomForest(type~., data = train, ntree = 100,
+                         mtry = ncol(train)-1, importance = TRUE)
+model_bag
+```
+When using $100$ trees with $9$ variables to consider at each split, the out of bag error is $27.52\%$. Furthermore, the test set error is
+```{r}
+predictions = predict(model_bag, test, type = "class")
+error_bag = (nrow(test) - sum(diag(table(predictions, test$type)))) / nrow(test)
+error_bag
+```
+This error is less than that by using a single tree, unpruned and pruned. Using all the variables helped when bagged together, but is there a certain subset of variables that can give most of the information to predict `type`? Try using random forests.
+
+## Random Forest
+
+Determine which value of $m$, number of variable to consider at each split, results in the lowest test set MSE.
+```{r}
+set.seed(100)
+test_errors = c()
+for(i in 1:9){
+  model = randomForest(type~., data = train, 
+                       mtry = i, ntree = 100, importance = TRUE)
+  predictions = predict(model, test, type = "class")
+  test_errors = c(test_errors, (nrow(test) - sum(diag(table(predictions, 
+                                                            test$type)))) / nrow(test))
+}
+te_df = data.frame(x = 1:9, te = test_errors)
+ggplot(te_df, aes(x = x, y = te)) + geom_path() + 
+  scale_x_continuous(breaks = 1:9) + 
+  ggtitle("Test Set MSE as a Function of Number of Variables to Consider at each Split") + 
+  theme_minimal()
+```
+
+The best number of variables to consider is $m=3$. Using this parameter, create a random forest.
+```{r}
+model_rf = randomForest(type~., data = train, 
+                        mtry = 3, ntree = 5, 
+                        importance = TRUE)
+importance(model_rf)
+```
+It appears to be that if reflective index was taken out of the model, then the average out of bag accuracy decreases by $2.9\%$. Similarly, if barium composition is dropped, then the average out of bag accuracy decreases by $3.3\%$. Furthermore, if reflective index was taken out of the model, the average decrease in node impurity is $20.75\%$. 
+
+The test error rate when using this model is
+```{r}
+predictions = predict(model_rf, test, type = "class")
+error_rf = (nrow(test) - sum(diag(table(predictions, 
+                                        test$type)))) / nrow(test)
+error_rf
+```
+This error rate is higher than the one for a bagged model. Subsetting on the variables did not help with improving the model. 
+
+The last approach to consider is boosting.
+
+## Boosting
+
+The function `gbm` can only solve binary classification problems. Therefore, the `type` variable will be divided into two groups: `0` and `1`. In group `0`, the glass types will be building windows and vehicle windows. In group `1`, the glass types will be containers, tableware and headlamps.
+```{r}
+type_class = ifelse(as.integer(df$type) < 4, 0, 1)
+new_df = cbind(df, typeclass = type_class) %>% subset(select = -type)
+new_train = new_df[indices,]
+new_test = new_df[-indices,]
+```
+
+Create a boosting model to predict `typeclass`.
+```{r}
+model_boost = gbm(typeclass ~ ., data = new_train, 
+                  distribution = "bernoulli", n.trees = 100, 
+                  interaction.depth = 4)
+```
+
+Plot the importance of variables.
+```{r}
+summary(model_boost)
+```
+
+It appears to be that magnesium concentration is heavily important, relatively compared to the other variables. Using this model, the test set error is
+```{r}
+predictions = predict(model_boost, new_test, 
+                      n.trees = 100, type = "response")
+probs = ifelse(predictions > 0.5, 1, 0)
+error_boost = (nrow(new_test) - sum(diag(table(probs, 
+                                               new_test$typeclass)))) / nrow(new_test)
+error_boost
+```
+This test set error rate is low. However, it cannot be compared with the other error values since this dealt with a different classification problem. However, different classification algorithms can be used to judge this value. 
+
+## KNN
+
+Use KNN to predict `typeclass`.
+```{r}
+set.seed(100)
+model_knn = knn(new_train, new_test, 
+                cl = new_train$typeclass, k = 5)
+predictions = ifelse(model_knn == 0, 0, 1)
+error_knn = (nrow(new_test) - sum(diag(table(predictions,
+                                             new_test$typeclass)))) / nrow(new_test)
+error_knn
+```
+The KNN approach did better than boosted trees. How about logistic regression?
+
+## Logistic Regression
+
+Create a logistic regression model to predict `typeclass` and report the test error rate.
+```{r, warning=FALSE}
+set.seed(100)
+model_log = glm(typeclass ~., data = new_train, family = "binomial")
+probs = predict(model_log, new_test, type = "response")
+predictions = ifelse(probs == 0, 0, 1)
+error_log = (nrow(new_test) - sum(diag(table(predictions, 
+                                             new_test$typeclass)))) / nrow(new_test)
+error_log
+```
+The logistic regression approach performed the worst.
+
+## Conclusion
+
+The test set errors for classification of `type` is plotted.
+```{r}
+type_df = data.frame("model" = c("tree", "pruned tree", 
+                                 "bagged tree", "random forest"),
+                     "error" = c(error_base, error_base_pruned,
+                                 error_bag, error_rf))
+ggplot(type_df, aes(x = reorder(model, error), y = error)) + 
+  geom_col(color = "bisque4", fill = "bisque1") + 
+  labs(x = "tree modeling approach", y = "test set misclassification error") + 
+  ggtitle("Test Set Error based on Modeling Approach \n to Predict Type") + 
+  theme_minimal()
+```
+
+The best appraoch to classify glass type for this dataset is random forests. 
+
+The test set errors for classification of `typeclass` is plotted.
+```{r}
+typeclass_df = data.frame("model" = c("boosted tree", "knn", 
+                                      "logistic regression"),
+                     "error" = c(error_boost, error_knn, error_log))
+ggplot(typeclass_df, aes(x = reorder(model, error), y = error)) + 
+  geom_col(color = "lemonchiffon4", fill = "lemonchiffon1") + 
+  labs(x = "modeling approach", y = "test set misclassification error") + 
+  ggtitle("Test Set Error based on Modeling Approach to Predict Typeclass") + 
+  theme_minimal()
+```
+
+The best approach to classify glass type class is the knn classifier, followed by the boosted tree. 
+
+All of the lab instructions in this document are taken from "An Introduction to Statistical Learning, with applications in R"  (Springer, 2013) with permission from the authors: G. James, D. Witten,  T. Hastie and R. Tibshirani. 
