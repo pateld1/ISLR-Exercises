@@ -1,0 +1,489 @@
+---
+title: 'MLStats: Unsupervised Learning'
+author: "Darshan Patel"
+date: "3/12/2019"
+output: 
+  md_document:
+    variant: markdown_github
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+In this assignment, mimic the lab exercises from ISLR Chapter 10: Unsupervised Learning.
+
+## Libraries
+Load the following libraries.
+```{r message=FALSE}
+rm(list = ls())
+library(MASS)
+library(ISLR)
+library(tidyverse)
+library(gridExtra)
+library(ggdendro)
+library(ggfortify)
+library(iCluster)
+```
+
+## Dataset
+
+In this assignment, several datasets will be utilized. The dataset that will be used for the first part of this assignment is is `CC General.csv`. In this dataset, there is information about credit card holders and their buying behaviors. The goal of this is to make a marketing strategy for different sorts of credit card holders based on their attributes. 
+
+(Source: https://www.kaggle.com/arjunbhasin2013/ccdata)
+
+```{r, warning=FALSE}
+df = read_delim("CC General.csv", delim = ',')
+df = na.omit(df)
+```
+
+The number of observations in this dataset are
+```{r}
+nrow(df)
+```
+
+The columns in this dataset are
+```{r}
+colnames(df)
+```
+
+Drop the `CUST_ID` column as it is only identification values.
+```{r}
+df = df %>% subset(select = -CUST_ID)
+```
+
+To identify patterns in credit cardholders behaviors, perform different unsupervised learning methods.
+
+## Principal Components Analysis
+
+Look at the means of the columns.
+```{r}
+as.data.frame(apply(df, 2, mean))
+```
+It is noticed here that different columns of data are on different scales. The `BALANCE` column runs in the thousands while many columns only have values less than one. 
+
+Look at the variances of the columns.
+```{r}
+as.data.frame(apply(df, 2, var))
+```
+The variances also deviate a lot from column to column. The `BALANCE` column has a variance of $4392775$ while the `BALANCE_FREQUENCY` column has a variance of `0.04305`. These differ by several powers of $10$. 
+
+Due to the fact that there are huge differences in the mean and variance of cardholder informations, it will help to standardize the data when performing principal components analysis.
+
+Perform PCA on the dataset and report the means and standard deviations used for PCA after scaling the dataset. 
+```{r}
+df_pca = prcomp(df, scale = TRUE)
+as.data.frame(cbind("mean" = df_pca$center, "sd" = df_pca$scale))
+```
+The values appear to look more manageable now that the values are scaled down. 
+
+Look at the principal component loading vector.
+```{r}
+as.data.frame(round(t(df_pca$rotation), 4))
+```
+
+A total of $17$ principal components are found. This is accurate because generally, there are $\min(n-1,p)$ informative principal components in a dataset with $n$ observations and $p$ variables. Here $n$ is very large and so there are $p$ principal components by default. (Remember that the `CUST_ID` column was dropped!)
+
+The first two principal components can be plotted as below.
+```{r}
+ggplot(df_pca$x[,1:2], aes(x = PC1, y = PC2)) + 
+  modelr::geom_ref_line(h = 0) +
+  modelr::geom_ref_line(v = 0) +
+  geom_text(aes(label = seq(1,nrow(df),1)), size = 2) +
+  xlab("First Principal Component") + 
+  ylab("Second Principal Component") + 
+  ggtitle("First Two Principal Components of Credit Cardholder Data") + 
+  theme_minimal()
+```
+
+Principal components are unique up to a sign change. Reproduce the mirror image of the plot above. Do this by reversing the signs of the principal components vectors and loadings.
+```{r}
+df_pca$rotation = -df_pca$rotation
+df_pca$x = -df_pca$x
+
+ggplot(df_pca$x[,1:2], aes(x = PC1, y = PC2)) + 
+  modelr::geom_ref_line(h = 0) +
+  modelr::geom_ref_line(v = 0) +
+  geom_text(aes(label = seq(1,nrow(df),1)), size = 2) +
+  xlab("First Principal Component") + 
+  ylab("Second Principal Component") + 
+  ggtitle("First Two Principal Components of Credit Cardholder Data") + 
+  labs(caption = "After Reversing Signs") + 
+  theme_minimal()
+```
+
+The standard deviations of the principal components are as follows.
+```{r}
+df_pca$sdev
+```
+There does not appear to be a lot of variation in the componenets calculated.
+
+Now, to understand how much the principal components explain the variance, compute the proportion of variance explained by each principal component.
+```{r}
+pca_var = df_pca$sdev^2
+pve = pca_var / sum(pca_var)
+pve
+```
+According to this, the first principal component explains $27.23\%$ of the variance in the data; the next principal component explains $20.37\%$ of the variance in the data.
+
+Plot the proportion of variance explained, PVE, by each component.
+```{r}
+pve_df = as.data.frame(pve) %>% mutate("cs_pve" = cumsum(pve))
+ggplot(pve_df, aes(x = 1:17, y = pve)) + geom_point() + 
+  scale_x_continuous(breaks = 1:17) + 
+  labs(x = "principal component", y = "PVE") + 
+  ggtitle("Proportion of Variance Explained by each Component") + 
+  theme_minimal()
+```
+
+Plot the cumulative proportion of variance explained as additional components are added.
+```{r}
+ggplot(pve_df, aes(x = 1:17, y = cs_pve)) + geom_point() + 
+  scale_x_continuous(breaks = 1:17) + 
+  labs(x = "principal component", y = "cumulative PVE") + 
+  ggtitle("Cumulative Proportion of Variance Explained") + 
+  theme_minimal()
+```
+
+After the $7$ principal component is made, $80\%$ of the variance in the data is explained. By the $10$th principal componenet, $90\%$ of the variance in the data is explained.
+
+Another unsupervised learning technique that can be used is clustering. There are many different types of clustering algorithms, two of which are $k$-means clustering and hierarchical clustering. Let's see those in action on the credit cardholders dataset.
+
+## $K$-Means Clustering
+
+To best understand the functionality of $k$-means clustering, it helps to use data that can be separated into classes.
+
+First simulate a dataset where two distinct clusters can be seen.
+```{r}
+set.seed(2)
+X = matrix(rnorm(100), ncol = 2)
+X[1:25, 1] = X[1:25, 1] + 5
+X[1:25, 2] = X[1:25, 2] - 10
+
+df = as.data.frame(X)
+ggplot(df, aes(x = V1, y = V2, color = V1 < 2.5)) + geom_point() + 
+  scale_colour_manual(labels = c("Cluster 1", "Cluster 2"),
+                      values = c("cyan3", "darkcyan"),
+                      name = NULL) +
+  labs(x = "x1", y = "x2") + 
+  ggtitle("Simulated Data of Two Clusters") + 
+  theme_minimal()
+```
+
+The two clusters can be visually seen. 
+
+Now perform $K$-means clustering with $K=2$.
+```{r}
+km_cluster_2 = kmeans(df, centers = 2)
+```
+
+The cluster assignments of the $100$ observations can be seen.
+```{r}
+km_cluster_2$cluster
+```
+
+It does appear that two clusters were made of equal size, as defined. Seeing this visually can only help to determine if the observations got properly clustered.
+
+```{r}
+df$cluster = factor(km_cluster_2$cluster)
+centers = as.data.frame(km_cluster_2$centers)
+
+ggplot(df, aes(x = V1, y = V2, color = cluster)) +
+  geom_point() + 
+  geom_point(data = centers, aes(x = V1, y = V2, color = 'Center')) + 
+  geom_point(data = centers, aes(x = V1, y = V2, color = 'Center'), 
+             alpha = 0.3) + 
+  labs(x = "x1", y = "x2") + 
+  ggtitle("Results after K Means Clustering with K = 2") + 
+  theme_minimal()
+```
+
+Two clusters are properly made. 
+
+Now try with $K = 3$ and plot the clusters. 
+```{r}
+km_cluster_3 = kmeans(df, centers = 3)
+df$cluster = factor(km_cluster_3$cluster)
+centers = as.data.frame(km_cluster_3$centers)
+
+ggplot(df, aes(x = V1, y = V2, color = cluster)) +
+  geom_point() + 
+  geom_point(data = centers, aes(x = V1, y = V2, color = 'Center')) + 
+  geom_point(data = centers, aes(x = V1, y = V2, color = 'Center'), 
+             alpha = 0.3) + 
+  labs(x = "x1", y = "x2") + 
+  ggtitle("Results after K Means Clustering with K = 3") + 
+  theme_minimal()
+```
+
+With the inclusion of the third cluster, one of the clusters that was previously properly in 1 cluster is now broken into two smaller clusters. 
+
+Look at the details of the clusters.
+```{r}
+km_cluster_3
+```
+
+The cluster sizes are $16$, $9$ and $25$. 
+
+Now run $K$ means clustering with multiple initial cluster assignments to find the best results.
+```{r}
+set.seed(20)
+kmeans(df, centers = 3, nstart = 1)$tot.withins
+kmeans(df, centers = 3, nstart = 20)$tot.withins
+```
+
+When utilizing more assignments, a more optimal result can be found here. Above the individual within-cluster sum of squares is shown. When more more assignments were used, a better clustering was made that lessened the inter-observation distances in the clusters. 
+
+Now let's use hierarchical clustering on this simulated dataset.
+
+## Hierarchical Clustering
+
+Perform hierarchical clustering with the following linkages: complete, single, average, median and plots its respective dendrogram.
+```{r}
+hc_complete = hclust(dist(df), method = "complete")
+hc_single = hclust(dist(df), method = "single")
+hc_average = hclust(dist(df), method = "average")
+hc_median = hclust(dist(df), method = "median")
+
+par(mfrow = c(2,2))
+plot(hc_complete, main = "Complete Linkage", xlab = "")
+plot(hc_single, main = "Single Linkage", xlab = "")
+plot(hc_average, main = "Average Linkage", xlab = "")
+plot(hc_median, main = "Median Linkage", xlab = "")
+```
+
+It is viually apparent that two clusters were made using each linkage type. Here the different types of linkages had no effect on the clustering.
+
+The cluster labels of each observation associated with the given cut of $2$ of the dendrogram can also be looked at.
+
+```{r}
+cutree(hc_complete, 2)
+cutree(hc_single, 2)
+cutree(hc_average, 2)
+cutree(hc_median, 2)
+```
+
+Despite the different linkages used, the same clusters are made with the same observations.
+
+Try scaling the variables to see what changes. Use complete linkage and plot the dendrogram.
+```{r}
+df = df %>% select(V1, V2) 
+df_scaled = scale(df)
+hc_complete_scaled = hclust(dist(df_scaled), method = "complete")
+plot(hc_complete_scaled, main = "Hierarchical Clustering with Scaled Features", sub = "")
+```
+
+Try hierarchical clustering for a simulated dataset with $3$ features.
+```{r}
+set.seed(3)
+X = matrix(rnorm(30 * 3), ncol = 3)
+X_dist = as.dist(1 - cor(t(X)))
+plot(hclust(X_dist, method = "complete"), main = "Hierarchical Clustering with Correlation-Based Distance", xlab = "", sub = "")
+```
+
+It is visually apparent that three distinct clusters are made directly from the entire dataset.
+
+Unsupervised clustering is often used in the analysis of genomic data. In particular, PCA and hierarchical clustering are the most popular tools for this. Try doing this on a genomic dataset from the internet.
+
+## Genomic Data
+
+The dataset that will be used here is `tissuesGeneExpression` which is from the `genomicsclass` package. Code is presented below to obtain the dataset. (When asked whether or not to update packages, say `n`.)
+
+```{r, include=FALSE}
+library(BiocInstaller)
+biocLite("genomicsclass/tissuesGeneExpression")
+library(tissuesGeneExpression)
+data(tissuesGeneExpression)
+library(rafalib)
+```
+
+First create the distance matrix and obtain the labels of the tissues.
+
+```{r}
+df = t(e)
+group = as.fumeric(tab$Tissue)
+```
+
+The different types of tissues are
+```{r}
+table(tab$Tissue)
+```
+
+The dimensions of the dataset is
+```{r}
+dim(df)
+```
+
+That's a staggering $22215$ different gene expression measurements, on only $189$ cancer cells.
+
+For the first part of this investigation, perform PCA on the scaled dataset.
+
+```{r}
+gene_pca = prcomp(df, scale = TRUE)
+```
+
+The first few principal component score vectors are plotted.
+```{r}
+Cols = function(vec){
+  cols = rainbow(length(unique(vec)))
+  return(cols[as.numeric(as.factor(vec))])
+}
+
+
+g1 = ggplot(gene_pca$x[,1:2], aes(x = PC1, y = PC2, color = Cols(group))) + 
+  modelr::geom_ref_line(h = 0) +
+  modelr::geom_ref_line(v = 0) +
+  geom_text(aes(label = seq(1,nrow(df),1)), size = 3) +
+  xlab("First Principal Component") + 
+  ylab("Second Principal Component") + 
+  scale_color_discrete(guide = FALSE) +
+  ggtitle("First and Second Principal Components \n of Gene Expression Data") + 
+  theme_minimal()
+g2 = ggplot(gene_pca$x[,c(1,5)], aes(x = PC1, y = PC5, color = Cols(group))) + 
+  modelr::geom_ref_line(h = 0) +
+  modelr::geom_ref_line(v = 0) +
+  geom_text(aes(label = seq(1,nrow(df),1)), size = 3) +
+  xlab("First Principal Component") + 
+  ylab("Fifth Principal Component") + 
+  scale_color_discrete(guide = FALSE) +
+  ggtitle("First and Fifth Principal Components \n of Gene Expression Data") + 
+  theme_minimal()
+grid.arrange(g1, g2, ncol = 2)
+
+```
+
+Values that have the same color indicate the same cancer types. It is clear from the plot that genes that exhibit the same cancer type tend to have similar gene expression levels.
+
+A summary of the proportion of variance of the first few principal components can be displayed in a tabular form but since there are more than a hundred principal components, it might be helpful to just visualize them. 
+```{r}
+pca_var = gene_pca$sdev^2
+pve = pca_var / sum(pca_var)
+pve_df = as.data.frame(pve) %>% mutate("cs_pve" = cumsum(pve))
+ggplot(pve_df, aes(x = 1:189, y = pve)) + geom_point() + 
+  scale_x_continuous(breaks = seq(1,189, by = 20), 
+                     labels = seq(1,189, by = 20)) + 
+  labs(x = "principal component", y = "PVE") + 
+  ggtitle("Proportion of Variance Explained by each Component") + 
+  theme_minimal()
+```
+
+After the $31$st principal component, little to none of the variance is explained by the principal components created.
+
+The cumulative principal of variance explained is plotted below.
+```{r}
+ggplot(pve_df, aes(x = 1:189, y = cs_pve)) + geom_point() + 
+  scale_x_continuous(breaks = seq(1,189, by = 20),
+                     labels = seq(1,189, by = 20)) + 
+  labs(x = "principal component", y = "cumulative PVE") + 
+  ggtitle("Cumulative Proportion of Variance Explained") + 
+  theme_minimal()
+```
+
+After the $31$st principal component, $80\%$ of the variance in the data is explained. After the $71$st principal component, $90\%$ of the variance in the data is explained. 
+
+Now let's try hierarchically custering the cell lines. First scale the data.
+```{r}
+scaled_df = scale(df)
+```
+
+Perform hierarchical clustering on the data using complete, single, average and median linkage and plot the dendrograms.
+```{r}
+dist_df = dist(scaled_df)
+plot(hclust(dist_df, method = "complete"), labels = group, 
+     main = "Complete Linkage", xlab = "", sub = "", ylab = "")
+plot(hclust(dist_df, method = "single"), labels = group, 
+     main = "Single Linkage", xlab = "", sub = "", ylab = "")
+plot(hclust(dist_df, method = "average"), labels = group, 
+     main = "Average Linkage", xlab = "", sub = "", ylab = "")
+plot(hclust(dist_df, method = "median"), labels = group, 
+     main = "Median Linkage", xlab = "", sub = "", ylab = "")
+```
+
+Depending on the type of linkages used, clusters were made differently. In the clustering done by complete linkage, the clusters appear to look balanced. In the clustering done by single linkage, there are many trailing clusters of size one. Average linkage created a balanced dendrogram and median linkage created a strange looking representation of clusters. 
+
+The dendrogram can be cut at the height of number of distinct tissue groups to see if the clusters correlate to the cancer tissue groups.
+```{r}
+gene_hc = hclust(dist(scaled_df))
+clusters = cutree(gene_hc, 7)
+table("predicted" = clusters, "actual" = tab$Tissue)
+```
+Of the $7$ different tissue types, the colon tissues, endometrium tissues and hippocampus tissues all got grouped into its own clusters. However these clusters also had other types of tissues within it. Hierarchical clustering created $3$ distinct clusters. No cluster is absolutely clean and properly made.
+
+The cluster dendrogram can be plotted.
+```{r}
+dend_data = dendro_data(gene_hc, type = "rectangle")
+plot(gene_hc)
+g3 = rect.hclust(gene_hc, k = 7)
+clustered_df = data.frame(num = unlist(g3),
+                      clust=rep(c("Cluster 1","Cluster 2", "Cluster 3",
+                                  "Cluster 4","Cluster 5", "Cluster 6",
+                                  "Cluster 7"),
+                                times = sapply(g3,length)))
+text_df = merge(label(dend_data), clustered_df, 
+                by.x = "label", by.y = "row.names")
+ggplot() + 
+  geom_segment(data=segment(dend_data), 
+               aes(x = x, y = y, xend = xend, yend = yend)) + 
+  geom_text(data=text_df, 
+            aes(x = x, y = y, label = label, hjust = 0, color = clust),
+            size = 3) +
+  scale_color_discrete(name = "Cluster") + 
+  labs(y = "height", x = NULL, 
+       title = "Scaled Hierarchical Clustering into 7 Clusters") + 
+  coord_flip() + scale_y_reverse(expand = c(0.2, 0)) + 
+    theme(axis.title.y=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank())
+```
+
+The output of the clusters give a summary of the object.
+```{r}
+gene_hc
+```
+The clusters were made using complete linkage and computing the Euclidean distances between features.
+
+Moving on from hierarchical clustering, try doing $k$-means clustering on the dataset to see if the same numbers of clusters yield the same results. Use $K=7$.
+
+```{r}
+set.seed(7)
+gene_km = kmeans(scaled_df, 7, nstart = 20)
+km_cluster_gene = gene_km$cluster
+table(km_cluster_gene, clusters)
+```
+Interestingly enough, by using $k$-means clustering, only $2$ tissue types got properly clustered into its own cluster with no disturbance. This contrasts with hierarchical clustering where $3$ distinct clusters are made.
+
+Rather than performing hierarchical clustering on the entire dataset, it can be performed on the first principal score vectors as follows.
+```{r}
+gene_hc_partial = hclust(dist(gene_pca$x[,1:21]))
+dend_data = dendro_data(gene_hc_partial, type = "rectangle")
+plot(gene_hc_partial)
+g3 = rect.hclust(gene_hc_partial, k = 7)
+clustered_df = data.frame(num = unlist(g3),
+                      clust=rep(c("Cluster 1","Cluster 2", "Cluster 3",
+                                  "Cluster 4","Cluster 5", "Cluster 6",
+                                  "Cluster 7"),
+                                times = sapply(g3,length)))
+text_df = merge(label(dend_data), clustered_df, 
+                by.x = "label", by.y = "row.names")
+ggplot() + 
+  geom_segment(data=segment(dend_data), 
+               aes(x = x, y = y, xend = xend, yend = yend)) + 
+  geom_text(data=text_df, 
+            aes(x = x, y = y, label = label, hjust = 0, color = clust),
+            size = 3) +
+  scale_color_discrete(name = "Cluster") + 
+  labs(y = "height", x = NULL, 
+       title = "Scaled Hierarchical Clustering into 7 Clusters",
+       caption = "Using only 7 Principal Components") + 
+  coord_flip() + scale_y_reverse(expand = c(0.2, 0)) + 
+    theme(axis.title.y=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank())
+```
+
+By only using a few of the principal components, the clusters are formed differently. 
+
+
+All of the lab instructions in this document are taken from "An Introduction to Statistical Learning, with applications in R"  (Springer, 2013) with permission from the authors: G. James, D. Witten,  T. Hastie and R. Tibshirani. 
